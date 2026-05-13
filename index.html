@@ -673,7 +673,7 @@ function renderH(rows) {
 let _map = null, _myLocMarker = null, _myLocCircle = null;
 
 function initPeta() {
-  if (_map) return; // sudah diinit
+  if (_map) { setTimeout(function(){ _map.invalidateSize(); }, 100); return; }
   _map = L.map('map').setView([-6.893, 107.630], 13);
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '&copy; <a href="https://openstreetmap.org">OpenStreetMap</a>', maxZoom: 19
@@ -721,90 +721,115 @@ function initPeta() {
 }
 
 function goMyLocation() {
-  const status = document.getElementById('locStatus');
-  // Pastikan peta sudah diinit
+  var status = document.getElementById('locStatus');
+
+  // Pastikan section peta visible & peta sudah diinit
   if (!_map) {
     showSec('peta', null);
     setTimeout(goMyLocation, 500);
     return;
   }
-  status.innerHTML = '⏳ Mendeteksi lokasi Anda...';
 
-  // Hapus listener lama jika ada
-  _map.off('locationfound locationerror');
+  status.innerHTML = '&#9203; Mendeteksi lokasi Anda...';
 
-  // Leaflet map.locate() — cara resmi Leaflet untuk geolocation mobile
-  _map.locate({ setView: false, maxZoom: 16, enableHighAccuracy: true, timeout: 10000 });
+  // Bersihkan event listener lama
+  _map.off('locationfound');
+  _map.off('locationerror');
+
+  // Gunakan Leaflet map.locate() — cara resmi untuk mobile
+  _map.locate({ setView: false, enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
 
   _map.on('locationfound', function(e) {
-    const lat = e.latlng.lat, lng = e.latlng.lng;
-    const accuracy = e.accuracy; // dalam meter
+    var lat      = e.latlng.lat;
+    var lng      = e.latlng.lng;
+    var accuracy = e.accuracy;
 
-    // Hapus layer lokasi lama
+    // Hapus marker & circle lama
     if (_myLocMarker) { _map.removeLayer(_myLocMarker); _myLocMarker = null; }
     if (_myLocCircle) { _map.removeLayer(_myLocCircle); _myLocCircle = null; }
 
-    // Lingkaran radius akurasi
+    // Lingkaran radius akurasi GPS
     _myLocCircle = L.circle(e.latlng, {
-      radius: accuracy,
-      color: '#27AE60', fillColor: '#27AE60',
-      fillOpacity: 0.10, weight: 2, dashArray: '4 4'
+      radius      : accuracy,
+      color       : '#27AE60',
+      fillColor   : '#27AE60',
+      fillOpacity : 0.08,
+      weight      : 2,
+      dashArray   : '6 4'
     }).addTo(_map);
 
-    // Marker posisi dengan ikon pulsing custom
-    const myIcon = L.divIcon({
-      className: '',
-      html: \`<div style="position:relative;width:22px;height:22px;">
-        <div style="position:absolute;inset:-10px;background:#27AE60;opacity:.18;border-radius:50%;animation:pm 1.4s infinite;"></div>
-        <div style="width:22px;height:22px;background:#27AE60;border-radius:50%;border:3px solid #fff;box-shadow:0 2px 10px rgba(39,174,96,.6);"></div>
-      </div>\`,
-      iconSize: [22, 22], iconAnchor: [11, 11], popupAnchor: [0, -14]
+    // Icon pulsing hijau (pakai string biasa, bukan template literal)
+    var iconHtml = '<div style="position:relative;width:22px;height:22px;">'
+      + '<div style="position:absolute;inset:-10px;background:#27AE60;opacity:.18;'
+      + 'border-radius:50%;animation:pm 1.4s infinite;"></div>'
+      + '<div style="width:22px;height:22px;background:#27AE60;border-radius:50%;'
+      + 'border:3px solid #fff;box-shadow:0 2px 10px rgba(39,174,96,.6);"></div>'
+      + '</div>';
+
+    var myIcon = L.divIcon({
+      className      : '',
+      html           : iconHtml,
+      iconSize       : [22, 22],
+      iconAnchor     : [11, 11],
+      popupAnchor    : [0, -14]
     });
+
+    var popupHtml = '<b>&#128225; Lokasi Anda</b><br>'
+      + '<span style="font-size:.8rem;color:#666;">Akurasi: &plusmn;'
+      + Math.round(accuracy) + ' meter</span>';
 
     _myLocMarker = L.marker(e.latlng, { icon: myIcon, zIndexOffset: 1000 })
       .addTo(_map)
-      .bindPopup(\`<b>📡 Lokasi Anda</b><br>
-        <span style="font-size:.8rem;color:#666;">Akurasi: ±\${Math.round(accuracy)} meter</span>\`)
+      .bindPopup(popupHtml)
       .openPopup();
 
-    // Fly to dengan animasi smooth
+    // Animasi zoom ke lokasi
     _map.flyTo(e.latlng, 15, { animate: true, duration: 1.5 });
 
-    // Hitung agen terdekat (Haversine sederhana)
+    // Haversine: jarak sesungguhnya dalam km
     function haversine(lat1, lng1, lat2, lng2) {
-      const R = 6371, dLat = (lat2-lat1)*Math.PI/180, dLng = (lng2-lng1)*Math.PI/180;
-      const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
-      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+      var R    = 6371;
+      var dLat = (lat2 - lat1) * Math.PI / 180;
+      var dLng = (lng2 - lng1) * Math.PI / 180;
+      var a    = Math.sin(dLat/2) * Math.sin(dLat/2)
+               + Math.cos(lat1 * Math.PI/180) * Math.cos(lat2 * Math.PI/180)
+               * Math.sin(dLng/2) * Math.sin(dLng/2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     }
-    let closest = null, minDist = Infinity;
-    DATA_AGEN.forEach(ag => {
-      const d = haversine(lat, lng, ag.lat, ag.lng);
+
+    var closest = null, minDist = Infinity;
+    DATA_AGEN.forEach(function(ag) {
+      var d = haversine(lat, lng, ag.lat, ag.lng);
       if (d < minDist) { minDist = d; closest = ag; }
     });
-    const distStr = minDist < 1 ? Math.round(minDist*1000)+' m' : minDist.toFixed(1)+' km';
-    const isQ = closest.j.includes('Quality');
-    const color = isQ ? '#FF8C42' : '#4A90D9';
-    status.innerHTML = \`✅ Lokasi ditemukan! Agen terdekat: 
-      <b style="color:\${color}">\${closest.n}</b> (\${closest.j}) — jarak ~\${distStr} &nbsp;
-      <a href="https://www.google.com/maps/dir/?api=1&destination=\${closest.lat},\${closest.lng}" 
-         target="_blank" rel="noopener"
-         style="display:inline-block;background:\${color};color:#fff;padding:3px 10px;border-radius:10px;text-decoration:none;font-size:.78rem;font-weight:700;margin-top:4px;">
-        🗺️ Petunjuk Arah
-      </a>\`;
+
+    var distStr  = minDist < 1 ? (Math.round(minDist * 1000) + ' m') : (minDist.toFixed(1) + ' km');
+    var isQ      = closest.j.indexOf('Quality') >= 0;
+    var pinColor = isQ ? '#FF8C42' : '#4A90D9';
+    var dirUrl   = 'https://www.google.com/maps/dir/?api=1&destination=' + closest.lat + ',' + closest.lng;
+
+    status.innerHTML = '&#10003; Lokasi ditemukan! &nbsp;Agen terdekat: '
+      + '<b style="color:' + pinColor + '">' + closest.n + '</b>'
+      + ' (' + closest.j + ') &mdash; ~' + distStr + '&nbsp;&nbsp;'
+      + '<a href="' + dirUrl + '" target="_blank" rel="noopener" '
+      + 'style="background:' + pinColor + ';color:#fff;padding:3px 12px;border-radius:10px;'
+      + 'text-decoration:none;font-size:.78rem;font-weight:700;">'
+      + '&#128506; Petunjuk Arah</a>';
   });
 
   _map.on('locationerror', function(e) {
-    const msg = e.message.includes('denied') || e.code === 1
-      ? 'Akses lokasi ditolak. Izinkan akses lokasi di pengaturan browser Anda.'
-      : e.code === 2 ? 'Lokasi tidak dapat ditentukan. Pastikan GPS aktif.'
-      : 'Waktu habis mendeteksi lokasi. Coba lagi.';
-    status.innerHTML = '⚠️ ' + msg;
+    var msg;
+    if (e.code === 1 || (e.message && e.message.indexOf('denied') >= 0)) {
+      msg = 'Akses lokasi ditolak. Izinkan lokasi di pengaturan browser Anda.';
+    } else if (e.code === 2) {
+      msg = 'Lokasi tidak dapat ditentukan. Pastikan GPS aktif.';
+    } else {
+      msg = 'Waktu habis mendeteksi lokasi. Coba lagi.';
+    }
+    status.innerHTML = '&#9888; ' + msg;
   });
 }
 
-// ═══════════════════════════════════════════════
-// ARTIKEL
-// ═══════════════════════════════════════════════
 function initArtikel() {
   document.getElementById('aGrid').innerHTML = DATA_ARTIKEL.map((a,i) => `
     <div class="a-card">
